@@ -1,0 +1,22 @@
+[
+  {
+    "name": "LOXA CZ10.3-60(120)",
+    "type": "Tapered Ball Nose",
+    "tip_diameter": 3.0,
+    "ball_radius": 1.5,
+    "max_diameter": 10.0,
+    "tool_length": 60.0,
+    "cutting_length": 25.0,
+    "notes": "Default tapered ball nose tool for professional stone relief engraving."
+  },
+  {
+    "name": "Flat Roughing 6mm",
+    "type": "Flat End Mill",
+    "tip_diameter": 6.0,
+    "ball_radius": 0.0,
+    "max_diameter": 6.0,
+    "tool_length": 50.0,
+    "cutting_length": 30.0,
+    "notes": "Standard flat endmill for fast material removal roughing passes."
+  }
+]
