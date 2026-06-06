@@ -506,5 +506,126 @@ class TestVeloraCNCModularSuite(unittest.TestCase):
         
         print("Curved Base Compensation Pipeline validation successful.")
 
+    # ==============================================================================
+    # Automated Case 20: True Tool Geometry Calculations
+    # ==============================================================================
+    def test_20_tool_geometry_calculations(self):
+        tool = {
+            "name": "LOXA CZ10.3",
+            "type": "Tapered Ball Nose",
+            "tip_diameter": 3.0,
+            "ball_radius": 1.5,
+            "max_diameter": 6.0,
+            "taper_angle": 10.0,
+            "cutting_length": 15.0,
+            "tool_length": 50.0,
+            "neck_diameter": 5.0,
+            "flute_length": 15.0,
+            "stickout_length": 35.0,
+            "overall_length": 50.0,
+            "safe_clearance_margin": 1.0,
+            "holder_diameter": 20.0,
+            "collet_diameter": 15.0,
+            "holder_length": 40.0
+        }
+        
+        # 1. Test profile LUT generation
+        r_samples, z_offsets = CAMEngine.compute_tool_profile_lut(tool, tool["type"], 1.0)
+        self.assertGreater(len(r_samples), 0)
+        self.assertEqual(r_samples[0], 0.0)
+        self.assertEqual(z_offsets[0], 0.0)  # offset at tip center is 0
+        
+        # At effective tip radius (physical tip radius + safe clearance margin), offset should be the ball nose offset at physical tip
+        tip_r_eff = 1.5 + 1.0  # physical 1.5 + safe clearance 1.0
+        idx_tip = np.argmin(np.abs(r_samples - tip_r_eff))
+        expected_z_at_tip = 1.5  # at physical radius of 1.5, z offset is 1.5
+        self.assertAlmostEqual(z_offsets[idx_tip], expected_z_at_tip, delta=0.2)
+        
+        # 2. Test polar search grid generation
+        r_cutter = float(tool["tip_diameter"]) / 2.0
+        r_neck = float(tool["neck_diameter"]) / 2.0
+        r_max = r_samples[-1] - 1.0
+        grid_pts = CAMEngine.generate_optimized_search_grid(r_cutter, r_neck, r_max, 1.0)
+        self.assertGreater(len(grid_pts), 0)
+        self.assertTrue(np.max(grid_pts[:, 2]) >= 10.0)
+        
+        print("True Tool Geometry Calculations validation successful.")
+
+    # ==============================================================================
+    # Automated Case 21: Compensated Z Geometry Aware Mode
+    # ==============================================================================
+    def test_21_compensated_z_geometry_aware(self):
+        tool = {
+            "name": "Short detail tool",
+            "type": "Tapered Ball Nose",
+            "tip_diameter": 2.0,
+            "ball_radius": 1.0,
+            "max_diameter": 6.0,
+            "taper_angle": 10.0,
+            "cutting_length": 5.0,
+            "tool_length": 20.0,
+            "neck_diameter": 5.0,
+            "flute_length": 5.0,
+            "stickout_length": 8.0,  # very short stickout to trigger holder collision!
+            "overall_length": 20.0,
+            "safe_clearance_margin": 1.0,
+            "holder_diameter": 30.0,  # large holder
+            "collet_diameter": 20.0,
+            "holder_length": 15.0
+        }
+        
+        # Create a heightmap with a very deep and narrow trench (height goes from 255 to 0)
+        # Pixel width is 1.0mm.
+        arr = np.full((30, 30), 255, dtype=np.uint8)
+        arr[10:20, 10:20] = 0  # deep square pocket
+        
+        # Compute compensated Z in both modes
+        xs = np.array([15.0])
+        ys = np.array([15.0])
+        
+        z_legacy = CAMEngine.compute_compensated_z_array(
+            xs, ys, tool["type"], tool, arr, 30.0, 30.0, 15.0,
+            30, 30, 0.0, 30.0, 0.0, 0.0, False, None, False,
+            toolpath_geometry_mode="Legacy"
+        )
+        
+        z_aware = CAMEngine.compute_compensated_z_array(
+            xs, ys, tool["type"], tool, arr, 30.0, 30.0, 15.0,
+            30, 30, 0.0, 30.0, 0.0, 0.0, False, None, False,
+            toolpath_geometry_mode="Geometry Aware"
+        )
+        
+        # In legacy mode, tool should go deep into the pocket (z_legacy should be low)
+        # In geometry-aware mode, the large holder/neck diameter will collide with the pocket walls,
+        # forcing the tool to be retracted (z_aware should be significantly higher than z_legacy)
+        self.assertTrue(z_aware[0] > z_legacy[0] + 0.5, f"Geometry Aware mode should retract tool to avoid neck/holder collision (z_aware: {z_aware[0]:.2f}, z_legacy: {z_legacy[0]:.2f})")
+        
+        # Test validation warnings
+        stone_mod = StoneReliefModule()
+        op_bad_stepover = {
+            "name": "Roughing",
+            "type": "Raster Roughing",
+            "tool_id": "T1",
+            "stepover": 10.0,  # exceeds tip diameter
+            "stepdown": 20.0   # exceeds max stepdown
+        }
+        warnings = stone_mod.validate_operation(op_bad_stepover, self.tool_lib, 200, 200, 15.0)
+        self.assertTrue(any("exceeds tool's maximum engagement limit" in w for w in warnings))
+        self.assertTrue(any("exceeds tool's maximum stepdown limit" in w for w in warnings))
+        
+        # Test max wall angle filter
+        test_pts = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, -10.0],  # sudden vertical drop of 10mm
+            [2.0, 0.0, -10.0]
+        ])
+        # With max wall angle 45 deg, max slope is tan(45) = 1.0.
+        # Drop from index 0 to 1 over dx=1.0 can be at most 1.0 * 1.0 = 1.0mm.
+        # So Z at index 1 should be filtered to max(-10.0, 0.0 - 1.0) = -1.0mm.
+        filtered = CAMEngine.apply_max_wall_angle_filter(test_pts, 45.0)
+        self.assertAlmostEqual(filtered[1, 2], -1.0, delta=0.01)
+        
+        print("Compensated Z Geometry Aware Mode validation successful.")
+
 if __name__ == "__main__":
     unittest.main()

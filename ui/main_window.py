@@ -90,6 +90,113 @@ class CAMCompileWorker(QThread):
         self.op_progress.emit(msg, percent)
 
 
+class ToolEditorDialog(QDialog):
+    def __init__(self, tool_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Edit Tool: {tool_data.get('name', 'Unnamed')}")
+        self.setMinimumWidth(800)
+        self.setStyleSheet("""
+            QDialog { background-color: #1a1a22; color: #e0e0e0; }
+            QLabel { color: #a0a0b0; font-weight: bold; }
+            QLineEdit, QComboBox, QTextEdit { background-color: #24242d; border: 1px solid #363645; color: #e0e0e0; border-radius: 4px; padding: 4px; }
+            QPushButton { background-color: #007acc; color: white; border-radius: 4px; padding: 6px 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #008be6; }
+        """)
+        
+        self.tool_id = tool_data.get("id", "")
+        
+        main_layout = QVBoxLayout(self)
+        
+        # Grid layout for fields
+        grid = QGridLayout()
+        main_layout.addLayout(grid)
+        
+        # Helper to add inputs
+        self.inputs = {}
+        
+        def add_field(label, key, val, row, col, is_combo=False, combo_items=None):
+            lbl = QLabel(label)
+            grid.addWidget(lbl, row, col * 2)
+            if is_combo:
+                cmb = QComboBox()
+                cmb.addItems(combo_items or [])
+                cmb.setCurrentText(str(val))
+                grid.addWidget(cmb, row, col * 2 + 1)
+                self.inputs[key] = cmb
+            else:
+                txt = QLineEdit(str(val))
+                grid.addWidget(txt, row, col * 2 + 1)
+                self.inputs[key] = txt
+                
+        # Basic parameters (Col 0)
+        add_field("Tool Name:", "name", tool_data.get("name", ""), 0, 0)
+        add_field("Tool Type:", "type", tool_data.get("type", "Flat End Mill"), 1, 0, is_combo=True, 
+                  combo_items=["Flat End Mill", "Ball Nose", "V-Bit", "Tapered Ball Nose", "Tapered End Mill", "Single Flute cutter"])
+        add_field("Tip Diameter (mm):", "tip_diameter", tool_data.get("tip_diameter", 3.0), 2, 0)
+        add_field("Ball Radius (mm):", "ball_radius", tool_data.get("ball_radius", 0.0), 3, 0)
+        add_field("Max Diameter (mm):", "max_diameter", tool_data.get("max_diameter", 6.0), 4, 0)
+        add_field("Taper Angle (deg):", "taper_angle", tool_data.get("taper_angle", 0.0), 5, 0)
+        add_field("Shank Diameter (mm):", "shank_diameter", tool_data.get("shank_diameter", 6.0), 6, 0)
+        add_field("Max Depth (mm):", "max_depth", tool_data.get("max_depth", 25.0), 7, 0)
+        
+        # Advanced geometry (Col 1)
+        add_field("Neck Diameter (mm):", "neck_diameter", tool_data.get("neck_diameter", tool_data.get("shank_diameter", 6.0)), 0, 1)
+        add_field("Flute Length (mm):", "flute_length", tool_data.get("flute_length", tool_data.get("cutting_length", 15.0)), 1, 1)
+        add_field("Stickout Length (mm):", "stickout_length", tool_data.get("stickout_length", tool_data.get("tool_length", 50.0) - 10.0), 2, 1)
+        add_field("Overall Length (mm):", "overall_length", tool_data.get("overall_length", tool_data.get("tool_length", 50.0)), 3, 1)
+        add_field("Safe Clearance (mm):", "safe_clearance_margin", tool_data.get("safe_clearance_margin", 1.0), 4, 1)
+        add_field("Max Engagement (mm):", "max_engagement", tool_data.get("max_engagement", 1.5), 5, 1)
+        add_field("Max Stepdown (mm):", "max_stepdown", tool_data.get("max_stepdown", 1.5), 6, 1)
+        add_field("Max Wall Angle (deg):", "max_wall_angle", tool_data.get("max_wall_angle", 45.0), 7, 1)
+        
+        # Holder/Notes (Col 2)
+        add_field("Min Feature Width (mm):", "min_feature_width", tool_data.get("min_feature_width", tool_data.get("tip_diameter", 3.0)), 0, 2)
+        add_field("Holder Diameter (mm):", "holder_diameter", tool_data.get("holder_diameter", 20.0), 1, 2)
+        add_field("Collet Diameter (mm):", "collet_diameter", tool_data.get("collet_diameter", 15.0), 2, 2)
+        add_field("Holder Length (mm):", "holder_length", tool_data.get("holder_length", 40.0), 3, 2)
+        
+        # Add Notes field across Col 2
+        lbl_notes = QLabel("Tool Notes:")
+        grid.addWidget(lbl_notes, 4, 4)
+        self.txt_notes = QTextEdit(tool_data.get("notes", ""))
+        self.txt_notes.setMaximumHeight(80)
+        grid.addWidget(self.txt_notes, 5, 4, 3, 2)
+        
+        # Buttons
+        btns = QHBoxLayout()
+        btn_ok = QPushButton("Save Tool Settings")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        main_layout.addLayout(btns)
+        
+    def get_tool_data(self):
+        data = {
+            "id": self.tool_id,
+            "name": self.inputs["name"].text(),
+            "type": self.inputs["type"].currentText(),
+            "notes": self.txt_notes.toPlainText()
+        }
+        # Numeric parsing helper
+        for key in ["tip_diameter", "ball_radius", "max_diameter", "taper_angle", 
+                    "shank_diameter", "max_depth", "neck_diameter", "flute_length", 
+                    "stickout_length", "overall_length", "safe_clearance_margin", 
+                    "max_engagement", "max_stepdown", "max_wall_angle", "min_feature_width", 
+                    "holder_diameter", "collet_diameter", "holder_length"]:
+            try:
+                data[key] = float(self.inputs[key].text())
+            except ValueError:
+                data[key] = 0.0
+                
+        # Maintain backwards compatibility mappings
+        data["tool_length"] = data["overall_length"]
+        data["cutting_length"] = data["flute_length"]
+        return data
+
+
 # ==============================================================================
 # MAIN WINDOW CLASS
 # ==============================================================================
@@ -139,6 +246,9 @@ class VeloraCNCMainWindow(QMainWindow):
         
         # 5. Build right-side Visual preview and audit panel
         self.build_preview_panel()
+        
+        # Connect currentRowChanged on operation list to update visual overlays
+        self.stack_widget.op_list.currentRowChanged.connect(self.update_preprocessed_images)
         
         # Initialize default project and libraries
         self.new_project()
@@ -525,6 +635,7 @@ class VeloraCNCMainWindow(QMainWindow):
         self.table_tools.setColumnCount(6)
         self.table_tools.setHorizontalHeaderLabels(["ID", "Name", "Type", "Tip Dia", "Taper Angle", "Cutting Len"])
         self.table_tools.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_tools.itemDoubleClicked.connect(self.on_tool_double_clicked)
         grid.addWidget(self.table_tools)
         
         # Tools control buttons
@@ -592,19 +703,25 @@ class VeloraCNCMainWindow(QMainWindow):
         self.cmb_exp_mode.addItems(["Single File with Pause (Mode A)", "Separate Files per Tool (Mode B)", "Separate Files per Operation (Mode C)"])
         grid.addWidget(self.cmb_exp_mode, 0, 1)
         
-        grid.addWidget(QLabel("Post Processor Standard:"), 1, 0)
+        grid.addWidget(QLabel("Toolpath Geometry Mode:"), 1, 0)
+        self.cmb_geom_mode = QComboBox()
+        self.cmb_geom_mode.addItems(["Legacy Thin-Tool Mode", "True Tool Geometry Aware"])
+        self.cmb_geom_mode.currentIndexChanged.connect(self.on_geometry_mode_changed)
+        grid.addWidget(self.cmb_geom_mode, 1, 1)
+        
+        grid.addWidget(QLabel("Post Processor Standard:"), 2, 0)
         self.cmb_post_std = QComboBox()
         self.cmb_post_std.addItems(["Mach3", "GRBL", "NCStudio", "Generic ISO"])
-        grid.addWidget(self.cmb_post_std, 1, 1)
+        grid.addWidget(self.cmb_post_std, 2, 1)
         
         self.chk_cv_mode = QCheckBox("Force Continuous Velocity (G64)")
         self.chk_cv_mode.setChecked(True)
-        grid.addWidget(self.chk_cv_mode, 2, 0, 1, 2)
+        grid.addWidget(self.chk_cv_mode, 3, 0, 1, 2)
         
         btn_compile = QPushButton("Compile All Operations & Export")
         btn_compile.setStyleSheet("background-color: #2a5a3d; color: white; font-size: 14px; padding: 10px;")
         btn_compile.clicked.connect(self.compile_all_operations)
-        grid.addWidget(btn_compile, 3, 0, 1, 2)
+        grid.addWidget(btn_compile, 4, 0, 1, 2)
         
         layout.addWidget(grp)
         
@@ -682,6 +799,33 @@ class VeloraCNCMainWindow(QMainWindow):
         self.scroll_diff.setWidgetResizable(True)
         self.preview_tabs.addTab(self.scroll_diff, "📊 Difference View")
         
+        # Reachability Map Tab
+        self.scroll_reach = QScrollArea()
+        self.lbl_preview_reach = QLabel("No Reachability Map Calculated")
+        self.lbl_preview_reach.setAlignment(Qt.AlignCenter)
+        self.lbl_preview_reach.setStyleSheet("background-color: #0b0b0f;")
+        self.scroll_reach.setWidget(self.lbl_preview_reach)
+        self.scroll_reach.setWidgetResizable(True)
+        self.preview_tabs.addTab(self.scroll_reach, "🟢 Reachability Map")
+        
+        # Machined Surface Tab
+        self.scroll_machined = QScrollArea()
+        self.lbl_preview_machined = QLabel("No Machined Surface Simulation Calculated")
+        self.lbl_preview_machined.setAlignment(Qt.AlignCenter)
+        self.lbl_preview_machined.setStyleSheet("background-color: #0b0b0f;")
+        self.scroll_machined.setWidget(self.lbl_preview_machined)
+        self.scroll_machined.setWidgetResizable(True)
+        self.preview_tabs.addTab(self.scroll_machined, "🛠 Machined Surface")
+        
+        # Tool Warnings Tab
+        self.scroll_warnings = QScrollArea()
+        self.txt_warnings = QTextEdit()
+        self.txt_warnings.setReadOnly(True)
+        self.txt_warnings.setStyleSheet("background-color: #0b0b0f; color: #ff5555; font-family: Consolas; font-size: 11px;")
+        self.scroll_warnings.setWidget(self.txt_warnings)
+        self.scroll_warnings.setWidgetResizable(True)
+        self.preview_tabs.addTab(self.scroll_warnings, "⚠️ Tool Warnings")
+        
         self.preview_layout.addWidget(self.preview_tabs, 5)
         
         # Operations stack editing component
@@ -730,6 +874,8 @@ class VeloraCNCMainWindow(QMainWindow):
             self.curve_view.set_project(self.project)
         self.update_preprocessed_images()
         self.log("[INFO] Started fresh new CAM project.")
+        if hasattr(self, "cmb_geom_mode"):
+            self.cmb_geom_mode.setCurrentIndex(0)
         self.canvas.set_stock_dimensions(self.project.stock_x, self.project.stock_y)
 
     def load_heightmap_image(self):
@@ -1055,6 +1201,7 @@ class VeloraCNCMainWindow(QMainWindow):
             "tool": tool,
             "simplification_preset": 1,
             "resol_x": 0.4,
+            "toolpath_geometry_mode": self.project.toolpath_geometry_mode,
             "curve_params": {
                 "curve_enabled": self.project.curve_enabled,
                 "curve_direction": self.project.curve_direction,
@@ -1254,6 +1401,266 @@ class VeloraCNCMainWindow(QMainWindow):
             self.table_tools.setItem(row, 4, QTableWidgetItem(f"{t['taper_angle']} deg"))
             self.table_tools.setItem(row, 5, QTableWidgetItem(f"{t['cutting_length']} mm"))
             
+    def on_tool_double_clicked(self, item):
+        row = item.row()
+        t_id = self.table_tools.item(row, 0).text()
+        tool = self.tool_library.get_tool(t_id)
+        if not tool:
+            return
+            
+        dialog = ToolEditorDialog(tool, self)
+        if dialog.exec_():
+            updated = dialog.get_tool_data()
+            self.tool_library.edit_tool(t_id, updated)
+            self.refresh_tools_table()
+            self.stack_widget.refresh_tool_dropdown()
+            self.update_preprocessed_images()
+
+    def on_geometry_mode_changed(self, index):
+        mode = "Legacy" if index == 0 else "Geometry Aware"
+        self.project.toolpath_geometry_mode = mode
+        self.project.save_snapshot()
+        self.log(f"[INFO] Switched Toolpath Geometry Mode to: {mode}")
+        for op in self.project.operations:
+            op["dirty"] = True
+        self.stack_widget.refresh_list()
+        self.update_preprocessed_images()
+
+    def compute_geometry_visualizations(self):
+        if self.heightmap_arr is None:
+            return
+            
+        try:
+            # 1. Get active operation and tool parameters
+            op = None
+            if self.project.operations:
+                current_row = self.stack_widget.op_list.currentRow()
+                if current_row >= 0 and current_row < len(self.project.operations):
+                    op = self.project.operations[current_row]
+                else:
+                    for o in self.project.operations:
+                        if o.get("enabled", True):
+                            op = o
+                            break
+                    if op is None:
+                        op = self.project.operations[0]
+            
+            if op is None:
+                op = {
+                    "type": "Finishing",
+                    "tool_id": "T1",
+                    "feed_xy": 1200.0,
+                    "spindle_speed": 18000.0,
+                    "stepover": 0.5,
+                    "max_depth": self.project.max_depth,
+                    "enabled": True,
+                    "dirty": True
+                }
+                
+            tool = self.tool_library.get_tool(op["tool_id"]) or self.tool_library.tools[0]
+            ttype = tool["type"]
+            
+            # Downsample the heightmap for fast preview simulation
+            hmap = self.processed_arr if self.processed_arr is not None else self.heightmap_arr
+            img_h, img_w = hmap.shape
+            preview_size = 150
+            if img_w > preview_size or img_h > preview_size:
+                scale_f = preview_size / max(img_w, img_h)
+                new_w = int(img_w * scale_f)
+                new_h = int(img_h * scale_f)
+                step_x = max(1, img_w // new_w)
+                step_y = max(1, img_h // new_h)
+                hmap_ds = hmap[::step_y, ::step_x]
+            else:
+                hmap_ds = hmap
+                
+            ds_h, ds_w = hmap_ds.shape
+            
+            # Create grid coordinates in mm
+            xs = np.linspace(0.0, self.project.stock_x, ds_w)
+            ys = np.linspace(0.0, self.project.stock_y, ds_h)
+            grid_xs, grid_ys = np.meshgrid(xs, ys)
+            
+            # Scale heightmap to actual target Z
+            Z_surf = -self.project.max_depth * (1.0 - hmap_ds / 255.0)
+            
+            curve_params = {
+                "curve_enabled": self.project.curve_enabled,
+                "curve_direction": self.project.curve_direction,
+                "curve_diagonal_dir": self.project.curve_diagonal_dir,
+                "curve_control_points": self.project.curve_control_points,
+                "curve_interpolation_type": self.project.curve_interpolation_type,
+                "curve_smoothness": self.project.curve_smoothness,
+                "curve_reference_mode": self.project.curve_reference_mode,
+                "stock_x": self.project.stock_x,
+                "stock_y": self.project.stock_y
+            }
+            if self.project.curve_enabled:
+                offsets = CAMEngine.evaluate_curve_offset_at_xy(grid_xs, grid_ys, self.project.stock_x, self.project.stock_y, curve_params)
+                Z_surf = Z_surf + offsets
+            
+            xs_flat = grid_xs.flatten()
+            ys_flat = grid_ys.flatten()
+            
+            offset_x = 0.0
+            offset_y = 0.0
+            carving_w = ds_w
+            carving_h = ds_h
+            preserve_aspect = False
+            
+            # Compute legacy compensated Z
+            Z_comp_legacy = CAMEngine.compute_compensated_z_array(
+                xs_flat, ys_flat, ttype, tool, hmap_ds, 
+                self.project.stock_x, self.project.stock_y, self.project.max_depth,
+                carving_w, carving_h, 0.0, float(ds_h), offset_x, offset_y,
+                preserve_aspect, self.project.base_color, self.project.invert_check,
+                curve_params=curve_params if self.project.curve_enabled else None,
+                toolpath_geometry_mode="Legacy"
+            ).reshape((ds_h, ds_w))
+            
+            # Compute geometry aware compensated Z
+            Z_comp_aware = CAMEngine.compute_compensated_z_array(
+                xs_flat, ys_flat, ttype, tool, hmap_ds, 
+                self.project.stock_x, self.project.stock_y, self.project.max_depth,
+                carving_w, carving_h, 0.0, float(ds_h), offset_x, offset_y,
+                preserve_aspect, self.project.base_color, self.project.invert_check,
+                curve_params=curve_params if self.project.curve_enabled else None,
+                toolpath_geometry_mode="Geometry Aware"
+            ).reshape((ds_h, ds_w))
+            
+            active_mode = self.project.toolpath_geometry_mode
+            Z_comp_active = Z_comp_aware if active_mode == "Geometry Aware" else Z_comp_legacy
+            
+            # Compute simulated Machined Surface
+            safe_margin = float(tool.get("safe_clearance_margin", 1.0))
+            r_samples, z_offsets = CAMEngine.compute_tool_profile_lut(tool, ttype, safe_margin)
+            
+            r_cutter = float(tool.get("tip_diameter", 3.0)) / 2.0
+            step = max(0.2, self.project.stock_x / ds_w)
+            R_max_cut = r_cutter + 1.0
+            search_range = np.arange(-R_max_cut, R_max_cut + step, step)
+            grid_dx, grid_dy = np.meshgrid(search_range, search_range)
+            grid_dx = grid_dx.flatten()
+            grid_dy = grid_dy.flatten()
+            grid_r = np.sqrt(grid_dx**2 + grid_dy**2)
+            mask_cut = grid_r <= R_max_cut
+            grid_dx = grid_dx[mask_cut]
+            grid_dy = grid_dy[mask_cut]
+            grid_r = grid_r[mask_cut]
+            grid_z_offsets = np.interp(grid_r, r_samples, z_offsets)
+            
+            Z_machined = np.full_like(Z_comp_active, -9999.0)
+            
+            for dx, dy, z_off in zip(grid_dx, grid_dy, grid_z_offsets):
+                shift_x = int(round(dx / step))
+                shift_y = int(round(dy / step))
+                
+                rolled = np.roll(Z_comp_active, (shift_y, shift_x), axis=(0, 1))
+                if shift_y > 0:
+                    rolled[:shift_y, :] = -self.project.max_depth
+                elif shift_y < 0:
+                    rolled[shift_y:, :] = -self.project.max_depth
+                if shift_x > 0:
+                    rolled[:, :shift_x] = -self.project.max_depth
+                elif shift_x < 0:
+                    rolled[:, shift_x:] = -self.project.max_depth
+                    
+                Z_machined = np.maximum(Z_machined, rolled + z_off)
+            
+            Z_machined = np.clip(Z_machined, -self.project.max_depth, 0.0)
+            
+            # Render Reachability Map
+            reach_rgb = np.zeros((ds_h, ds_w, 3), dtype=np.uint8)
+            diff = Z_machined - Z_surf
+            
+            is_green = diff <= 0.15
+            is_geometry_retracted = Z_comp_aware > Z_comp_legacy + 0.15
+            flute_len = float(tool.get("flute_length", tool.get("cutting_length", 15.0)))
+            is_rubbing = (Z_machined < -flute_len)
+            is_red = (is_geometry_retracted | is_rubbing) & (~is_green)
+            is_yellow = (~is_green) & (~is_red)
+            
+            reach_rgb[is_green] = [46, 204, 113]
+            reach_rgb[is_yellow] = [241, 196, 15]
+            reach_rgb[is_red] = [231, 76, 60]
+            
+            # Render Machined Surface shading
+            norm_machined = (Z_machined - Z_machined.min()) / max(1e-5, Z_machined.max() - Z_machined.min())
+            dy_img, dx_img = np.gradient(norm_machined)
+            lx, ly, lz = 1.0, 1.0, 1.5
+            norm_light = np.sqrt(lx**2 + ly**2 + lz**2)
+            lx, ly, lz = lx/norm_light, ly/norm_light, lz/norm_light
+            
+            nx = -dx_img
+            ny = -dy_img
+            nz = np.ones_like(nx) * 0.15
+            norm_n = np.sqrt(nx**2 + ny**2 + nz**2)
+            nx, ny, nz = nx/norm_n, ny/norm_n, nz/norm_n
+            
+            shaded = nx * lx + ny * ly + nz * lz
+            shaded = np.clip((shaded + 1.0) / 2.0 * 255.0, 0, 255).astype(np.uint8)
+            
+            bytes_reach = reach_rgb.tobytes()
+            q_img_reach = QImage(bytes_reach, ds_w, ds_h, ds_w*3, QImage.Format_RGB888)
+            pm_reach = QPixmap.fromImage(q_img_reach)
+            
+            scaled_w = max(400, self.canvas.width())
+            scaled_h = max(400, self.canvas.height())
+            self.lbl_preview_reach.setPixmap(pm_reach.scaled(
+                scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            ))
+            
+            pm_machined = self.arr_to_pixmap(shaded)
+            self.lbl_preview_machined.setPixmap(pm_machined.scaled(
+                scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            ))
+            
+            # Generate Tool Warnings
+            warnings = []
+            total_px = ds_w * ds_h
+            red_px = np.sum(is_red)
+            yellow_px = np.sum(is_yellow)
+            
+            warnings.append(f"=== TOOLPATH ANALYSIS LOG ({active_mode} Mode) ===")
+            warnings.append(f"Active Tool: {tool['name']} ({ttype})")
+            warnings.append(f"Tip Diameter: {tool['tip_diameter']} mm | Neck Diameter: {tool['neck_diameter']} mm")
+            warnings.append(f"Stickout Length: {tool['stickout_length']} mm | Flute Length: {tool['flute_length']} mm")
+            warnings.append(f"--------------------------------------------------")
+            
+            if red_px > 0:
+                warnings.append(f"⚠️ DANGER: {red_px / total_px * 100.0:.1f}% of surface has COLLISIONS or RUBBING!")
+                if np.any(is_geometry_retracted):
+                    warnings.append(f"  - Neck/holder collision detected: Tool was forced to retract to prevent collision.")
+                if np.any(is_rubbing):
+                    warnings.append(f"  - Flute length exceeded: Machined depth exceeds cutting flute length ({flute_len} mm). Non-cutting neck will rub workpiece.")
+            else:
+                warnings.append(f"✅ Safe clearance: No neck/holder collisions or flute rubbing detected.")
+                
+            if yellow_px > 0:
+                warnings.append(f"ℹ️ Unreachable regions: {yellow_px / total_px * 100.0:.1f}% of details are too narrow for this cutter nose.")
+            else:
+                warnings.append(f"✅ Complete detail reachability: Tool nose can resolve all surface features.")
+                
+            D = tool["neck_diameter"]
+            L = tool["stickout_length"]
+            if D > 0 and L > 0:
+                deflection_index = (L ** 3) / (D ** 4)
+                warnings.append(f"--------------------------------------------------")
+                warnings.append(f"Tool Deflection / Rigidity Assessment:")
+                warnings.append(f"  - Rigidity Index (L^3/D^4): {deflection_index:.2f}")
+                if deflection_index > 150.0:
+                    warnings.append(f"  ❌ WARNING: Tool is highly flexible! High risk of deflection, chatter, or breakage.")
+                    warnings.append(f"     Suggestion: Reduce stickout length or use a tool with a thicker shank.")
+                elif deflection_index > 50.0:
+                    warnings.append(f"  ⚠️ CAUTION: Moderate tool deflection risk. Suggest conservative feed rate.")
+                else:
+                    warnings.append(f"  ✅ Tool rigidity is excellent. Stable cutting expected.")
+            
+            self.txt_warnings.setPlainText("\n".join(warnings))
+            
+        except Exception as e:
+            self.log(f"[ERROR] Morphological simulation preview failed: {str(e)}")
+            
     def add_library_tool(self):
         new_t = {
             "name": "Custom Router cutter",
@@ -1326,6 +1733,9 @@ class VeloraCNCMainWindow(QMainWindow):
                 self.cmb_axis_orient.setCurrentIndex(1 if self.project.swap_axes else 0)
             if hasattr(self, "chk_retract"):
                 self.chk_retract.setChecked(self.project.retract_between_passes)
+            if hasattr(self, "cmb_geom_mode"):
+                mode_idx = 1 if self.project.toolpath_geometry_mode == "Geometry Aware" else 0
+                self.cmb_geom_mode.setCurrentIndex(mode_idx)
             self.cmb_exp_mode.setCurrentText(self.project.export_mode)
             
             # Load project heightmap image
@@ -1445,6 +1855,8 @@ class VeloraCNCMainWindow(QMainWindow):
             self.lbl_preview_diff.setPixmap(pm_diff.scaled(
                 scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
             ))
+            
+            self.compute_geometry_visualizations()
             
         except Exception as e:
             self.log(f"[ERROR] Preprocessing preview update failed: {str(e)}")

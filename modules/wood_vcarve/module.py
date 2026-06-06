@@ -120,6 +120,7 @@ class WoodVCarveModule(BaseModule):
         rdp_tol = project_params.get("opt_compression_tol", 0.05)
         min_z_var = project_params.get("opt_min_z_variation", 0.05)
         
+        geom_mode = project_params.get("toolpath_geometry_mode", "Legacy")
         toolpath_moves = []
         
         if op_type == "Flat Clearing":
@@ -218,7 +219,8 @@ class WoodVCarveModule(BaseModule):
                 z_vcomp = CAMEngine.compute_compensated_z_array(
                     xs, ys, ttype, tool, arr, stock_x, stock_y, max_depth,
                     carving_w, carving_h, min_x, min_y, offset_x, offset_y,
-                    preserve_aspect, base_color, invert_check, curve_params=curve_params
+                    preserve_aspect, base_color, invert_check, curve_params=curve_params,
+                    toolpath_geometry_mode=geom_mode
                 )
                 
                 line_points = np.column_stack((xs, ys, z_vcomp))

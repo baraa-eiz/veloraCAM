@@ -30,6 +30,18 @@ class ToolLibrary:
                 "taper_angle": 10.0,
                 "shank_diameter": 10.0,
                 "max_depth": 25.0,
+                "neck_diameter": 6.0,
+                "flute_length": 25.0,
+                "stickout_length": 40.0,
+                "overall_length": 60.0,
+                "safe_clearance_margin": 1.0,
+                "max_engagement": 1.5,
+                "max_stepdown": 15.0,
+                "max_wall_angle": 60.0,
+                "min_feature_width": 1.0,
+                "holder_diameter": 25.0,
+                "collet_diameter": 20.0,
+                "holder_length": 30.0,
                 "notes": "Default tapered ball nose tool for professional stone relief engraving."
             },
             {
@@ -44,6 +56,18 @@ class ToolLibrary:
                 "taper_angle": 0.0,
                 "shank_diameter": 6.0,
                 "max_depth": 30.0,
+                "neck_diameter": 6.0,
+                "flute_length": 30.0,
+                "stickout_length": 40.0,
+                "overall_length": 50.0,
+                "safe_clearance_margin": 1.0,
+                "max_engagement": 3.0,
+                "max_stepdown": 3.0,
+                "max_wall_angle": 45.0,
+                "min_feature_width": 3.0,
+                "holder_diameter": 20.0,
+                "collet_diameter": 15.0,
+                "holder_length": 35.0,
                 "notes": "Standard flat endmill for fast material removal roughing passes."
             },
             {
@@ -58,6 +82,18 @@ class ToolLibrary:
                 "taper_angle": 60.0,
                 "shank_diameter": 6.0,
                 "max_depth": 10.0,
+                "neck_diameter": 6.0,
+                "flute_length": 15.0,
+                "stickout_length": 35.0,
+                "overall_length": 45.0,
+                "safe_clearance_margin": 1.0,
+                "max_engagement": 1.0,
+                "max_stepdown": 2.0,
+                "max_wall_angle": 45.0,
+                "min_feature_width": 0.2,
+                "holder_diameter": 20.0,
+                "collet_diameter": 15.0,
+                "holder_length": 35.0,
                 "notes": "60 degree V-Bit for detailed wood V-carving and engraving."
             },
             {
@@ -72,6 +108,18 @@ class ToolLibrary:
                 "taper_angle": 90.0,
                 "shank_diameter": 8.0,
                 "max_depth": 8.0,
+                "neck_diameter": 8.0,
+                "flute_length": 10.0,
+                "stickout_length": 40.0,
+                "overall_length": 50.0,
+                "safe_clearance_margin": 1.0,
+                "max_engagement": 1.0,
+                "max_stepdown": 2.0,
+                "max_wall_angle": 45.0,
+                "min_feature_width": 0.5,
+                "holder_diameter": 20.0,
+                "collet_diameter": 15.0,
+                "holder_length": 35.0,
                 "notes": "90 degree specialized V-groove cutter for Alucobond/ACP folding lines."
             },
             {
@@ -86,6 +134,18 @@ class ToolLibrary:
                 "taper_angle": 0.0,
                 "shank_diameter": 3.175,
                 "max_depth": 12.0,
+                "neck_diameter": 3.175,
+                "flute_length": 12.0,
+                "stickout_length": 30.0,
+                "overall_length": 40.0,
+                "safe_clearance_margin": 1.0,
+                "max_engagement": 1.5,
+                "max_stepdown": 1.5,
+                "max_wall_angle": 45.0,
+                "min_feature_width": 3.0,
+                "holder_diameter": 20.0,
+                "collet_diameter": 15.0,
+                "holder_length": 35.0,
                 "notes": "High speed single-flute routing bit for clean acrylic and aluminum cutting."
             }
         ]
@@ -99,18 +159,38 @@ class ToolLibrary:
                 # Standardize database format and apply unique tool IDs if missing
                 self.tools = []
                 for idx, t in enumerate(data):
+                    tip_dia = float(t.get("tip_diameter", 3.0))
+                    max_dia = float(t.get("max_diameter", 6.0))
+                    tool_len = float(t.get("tool_length", 50.0))
+                    cut_len = float(t.get("cutting_length", 25.0))
+                    shank_dia = float(t.get("shank_diameter", 6.0))
+                    
                     tool = {
                         "id": t.get("id", f"T{idx+1}"),
                         "name": t.get("name", "Unnamed Tool"),
                         "type": t.get("type", "Flat End Mill"),
-                        "tip_diameter": float(t.get("tip_diameter", 3.0)),
+                        "tip_diameter": tip_dia,
                         "ball_radius": float(t.get("ball_radius", 0.0)),
-                        "max_diameter": float(t.get("max_diameter", 6.0)),
-                        "tool_length": float(t.get("tool_length", 50.0)),
-                        "cutting_length": float(t.get("cutting_length", 25.0)),
+                        "max_diameter": max_dia,
+                        "tool_length": tool_len,
+                        "cutting_length": cut_len,
                         "taper_angle": float(t.get("taper_angle", 0.0)),
-                        "shank_diameter": float(t.get("shank_diameter", 6.0)),
+                        "shank_diameter": shank_dia,
                         "max_depth": float(t.get("max_depth", 25.0)),
+                        
+                        # New physical cutter geometry parameters
+                        "neck_diameter": float(t.get("neck_diameter", shank_dia)),
+                        "flute_length": float(t.get("flute_length", cut_len)),
+                        "stickout_length": float(t.get("stickout_length", tool_len - 10.0)),
+                        "overall_length": float(t.get("overall_length", tool_len)),
+                        "safe_clearance_margin": float(t.get("safe_clearance_margin", 1.0)),
+                        "max_engagement": float(t.get("max_engagement", tip_dia * 0.5)),
+                        "max_stepdown": float(t.get("max_stepdown", tip_dia * 0.5)),
+                        "max_wall_angle": float(t.get("max_wall_angle", 45.0)),
+                        "min_feature_width": float(t.get("min_feature_width", tip_dia)),
+                        "holder_diameter": float(t.get("holder_diameter", 20.0)),
+                        "collet_diameter": float(t.get("collet_diameter", 15.0)),
+                        "holder_length": float(t.get("holder_length", 40.0)),
                         "notes": t.get("notes", "")
                     }
                     self.tools.append(tool)

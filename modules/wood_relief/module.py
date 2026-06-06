@@ -77,6 +77,37 @@ class WoodReliefModule(BaseModule):
             
         return [op_rough, op_finish, op_edge]
 
+    def validate_operation(self, op, tool_library, stock_x, stock_y, max_depth):
+        """
+        Performs wood carving validation checking physical parameters, rigidity, and engagement limits.
+        """
+        warnings = super().validate_operation(op, tool_library, stock_x, stock_y, max_depth)
+        tool_id = op.get("tool_id", "")
+        tool = tool_library.get_tool(tool_id) if tool_library else None
+        
+        if tool:
+            # 1. Rigidity Assessment: L^3 / D^4
+            L = tool.get("stickout_length", tool.get("tool_length", 50.0) - 10.0)
+            D = tool.get("neck_diameter", tool.get("shank_diameter", 6.0))
+            if D > 0 and L > 0:
+                deflection_index = (L ** 3) / (D ** 4)
+                if deflection_index > 150.0:
+                    warnings.append(f"Rigidity Alert: Tool is highly flexible (Rigidity Index: {deflection_index:.1f}). High deflection/breakage risk on wood.")
+                elif deflection_index > 50.0:
+                    warnings.append(f"Rigidity Caution: Moderate tool deflection risk (Rigidity Index: {deflection_index:.1f}).")
+            
+            # 2. Engagement Limits
+            max_eng = tool.get("max_engagement", 1.5)
+            max_sd = tool.get("max_stepdown", 1.5)
+            stepover = op.get("stepover", 1.0)
+            stepdown = op.get("stepdown", 1.0)
+            if stepover > max_eng:
+                warnings.append(f"Engagement Warning: Requested stepover ({stepover}mm) exceeds tool's maximum engagement limit ({max_eng}mm).")
+            if stepdown > max_sd and op.get("type") == "Raster Roughing":
+                warnings.append(f"Engagement Warning: Requested stepdown ({stepdown}mm) exceeds tool's maximum stepdown limit ({max_sd}mm).")
+                
+        return warnings
+
     def compile_toolpath(self, op, arr, project_params, progress_callback=None):
         """
         Compiles fast, deep wood relief carvings.
@@ -113,6 +144,7 @@ class WoodReliefModule(BaseModule):
         rdp_tol = project_params.get("opt_compression_tol", 0.05)
         min_z_var = project_params.get("opt_min_z_variation", 0.05)
         
+        geom_mode = project_params.get("toolpath_geometry_mode", "Legacy")
         toolpath_moves = []
         
         if op_type == "Raster Roughing":
@@ -209,10 +241,14 @@ class WoodReliefModule(BaseModule):
                 z_comp = CAMEngine.compute_compensated_z_array(
                     xs, ys, ttype, tool, arr, stock_x, stock_y, max_depth,
                     carving_w, carving_h, min_x, min_y, offset_x, offset_y,
-                    preserve_aspect, base_color, invert_check, curve_params=curve_params
+                    preserve_aspect, base_color, invert_check, curve_params=curve_params,
+                    toolpath_geometry_mode=geom_mode
                 )
                 
                 line_points = np.column_stack((xs, ys, z_comp))
+                if geom_mode == "Geometry Aware":
+                    max_wall_angle = tool.get("max_wall_angle", 45.0)
+                    line_points = CAMEngine.apply_max_wall_angle_filter(line_points, max_wall_angle)
                 line_points = CAMEngine.apply_min_z_variation_filter(line_points, min_z_var)
                 compressed = CAMEngine.compress_path_3d(line_points, rdp_tol)
                 

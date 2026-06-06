@@ -45,6 +45,37 @@ class NaturalCubicSpline:
         dx = t - self.x[idx]
         return self.a[idx] + self.b[idx] * dx + self.c[idx] * (dx ** 2) + self.d[idx] * (dx ** 3)
 
+class HeightmapGeometrySource:
+    """
+    A generic geometric representation of the heightmap surface.
+    Conforms to future mesh/STL/voxel extensions.
+    """
+    def __init__(self, arr, stock_x, stock_y, max_depth, carving_w, carving_h, 
+                 min_x, min_y, offset_x, offset_y, preserve_aspect, base_color=None, 
+                 invert_check=False, curve_params=None):
+        self.arr = arr
+        self.stock_x = stock_x
+        self.stock_y = stock_y
+        self.max_depth = max_depth
+        self.carving_w = carving_w
+        self.carving_h = carving_h
+        self.min_x = min_x
+        self.min_y = min_y
+        self.offset_x = offset_x
+        self.offset_y = offset_y
+        self.preserve_aspect = preserve_aspect
+        self.base_color = base_color
+        self.invert_check = invert_check
+        self.curve_params = curve_params
+        
+    def get_z_at(self, xs, ys):
+        return CAMEngine.compute_surface_z_vectorized(
+            xs, ys, self.arr, self.stock_x, self.stock_y, self.max_depth,
+            self.carving_w, self.carving_h, self.min_x, self.min_y, 
+            self.offset_x, self.offset_y, self.preserve_aspect, 
+            self.base_color, self.invert_check, curve_params=self.curve_params
+        )
+
 class CAMEngine:
     """
     CAM Mathematics and Vectorized Calculation Engine for Velora CNC.
@@ -188,11 +219,42 @@ class CAMEngine:
     def compute_compensated_z_array(xs, ys, ttype, tool_params, arr, stock_x, stock_y, max_depth,
                                    carving_w, carving_h, min_x, min_y, offset_x, offset_y,
                                    preserve_aspect, base_color=None, invert_check=False,
-                                   curve_params=None):
+                                   curve_params=None, toolpath_geometry_mode="Legacy"):
         """
         Precomputes the tool profile offsets and evaluates maximum compensated vertical Z points in parallel.
+        Supports both Legacy center-point nose compensation and Tool Geometry Aware modeling.
         """
-        # Determine R_max
+        if toolpath_geometry_mode == "Geometry Aware":
+            safe_margin = float(tool_params.get("safe_clearance_margin", 1.0))
+            r_samples, z_offsets = CAMEngine.compute_tool_profile_lut(tool_params, ttype, safe_margin)
+            
+            r_cutter = float(tool_params.get("tip_diameter", 3.0)) / 2.0
+            r_neck = float(tool_params.get("neck_diameter", tool_params.get("max_diameter", 6.0))) / 2.0
+            r_max = r_samples[-1] - safe_margin
+            
+            grid_pts = CAMEngine.generate_optimized_search_grid(r_cutter, r_neck, r_max, safe_margin)
+            grid_dx = grid_pts[:, 0]
+            grid_dy = grid_pts[:, 1]
+            grid_r = grid_pts[:, 2]
+            
+            grid_z_offsets = np.interp(grid_r, r_samples, z_offsets)
+            
+            N = len(xs)
+            max_zs = np.full(N, -9999.0)
+            
+            for dx, dy, z_off in zip(grid_dx, grid_dy, grid_z_offsets):
+                local_xs = xs + dx
+                local_ys = ys + dy
+                z_surfs = CAMEngine.compute_surface_z_vectorized(
+                    local_xs, local_ys, arr, stock_x, stock_y, max_depth,
+                    carving_w, carving_h, min_x, min_y, offset_x, offset_y,
+                    preserve_aspect, base_color, invert_check, curve_params=curve_params
+                )
+                max_zs = np.maximum(max_zs, z_surfs - z_off)
+                
+            return max_zs
+
+        # Determine R_max (Legacy Mode)
         tip_dia = tool_params.get("tip_diameter", 3.0)
         ball_rad = tool_params.get("ball_radius", 1.5)
         max_dia = tool_params.get("max_diameter", 10.0)
@@ -644,3 +706,174 @@ class CAMEngine:
         ref_offset = CAMEngine.get_curve_reference_offset(control_pts, interpolation_type, smoothness, reference_mode)
         comp_z = raw_z - ref_offset
         return float(np.max(comp_z))
+
+    @staticmethod
+    def get_tool_radius_at_z(z, tool_params, ttype):
+        """
+        Computes the physical tool radius (in mm) at a given local Z height above the tip.
+        Handles flat, ball, tapered, V-bit, and holder profiles.
+        """
+        tip_dia = float(tool_params.get("tip_diameter", 3.0))
+        max_dia = float(tool_params.get("max_diameter", 6.0))
+        taper_angle = float(tool_params.get("taper_angle", 0.0))
+        flute_len = float(tool_params.get("flute_length", tool_params.get("cutting_length", 15.0)))
+        stickout = float(tool_params.get("stickout_length", tool_params.get("tool_length", 35.0)))
+        neck_dia = float(tool_params.get("neck_diameter", max_dia))
+        collet_dia = float(tool_params.get("collet_diameter", 15.0))
+        holder_dia = float(tool_params.get("holder_diameter", 20.0))
+        
+        if z < flute_len:
+            if ttype == "Flat End Mill":
+                r = tip_dia / 2.0
+            elif ttype == "Ball Nose":
+                r_ball = float(tool_params.get("ball_radius", tip_dia / 2.0))
+                if z <= r_ball:
+                    r = np.sqrt(max(0.0, r_ball**2 - (r_ball - z)**2))
+                else:
+                    r = tip_dia / 2.0
+            elif ttype == "V-Bit":
+                r_tip = tip_dia / 2.0
+                theta = np.radians(taper_angle / 2.0)
+                r = r_tip + z * np.tan(theta)
+            elif ttype == "Tapered Ball Nose":
+                r_tip = float(tool_params.get("ball_radius", 1.5))
+                theta = np.radians(taper_angle)
+                r_tangent = r_tip * np.cos(theta)
+                z_tangent = r_tip - r_tip * np.sin(theta)
+                if z <= z_tangent:
+                    r = np.sqrt(max(0.0, r_tip**2 - (r_tip - z)**2))
+                else:
+                    r = r_tangent + (z - z_tangent) * np.tan(theta)
+            elif ttype == "Tapered End Mill":
+                r_tip = tip_dia / 2.0
+                theta = np.radians(taper_angle)
+                r = r_tip + z * np.tan(theta)
+            else:
+                r = tip_dia / 2.0
+            
+            # Cap at max_diameter / 2
+            r = min(r, max_dia / 2.0)
+        elif z < stickout:
+            r = neck_dia / 2.0
+        else:
+            # Holder / collet zone
+            if z < stickout + 15.0:
+                r = collet_dia / 2.0
+            else:
+                r = holder_dia / 2.0
+                
+        return r
+
+    @staticmethod
+    def compute_tool_profile_lut(tool_params, ttype, safe_margin):
+        """
+        Precomputes the inverse tool profile mapping r -> z_local (height above tip where radius is r).
+        """
+        stickout = float(tool_params.get("stickout_length", tool_params.get("tool_length", 35.0)))
+        holder_len = float(tool_params.get("holder_length", 40.0))
+        H_max = stickout + holder_len
+        
+        # Sane defaults if overall_length or other values are missing
+        if H_max <= 0.0:
+            H_max = 75.0
+            
+        z_grid = np.linspace(0.0, H_max, 1000)
+        R_grid = np.array([CAMEngine.get_tool_radius_at_z(z, tool_params, ttype) for z in z_grid])
+        
+        # Effective radius includes safe clearance margin
+        R_grid_eff = R_grid + safe_margin
+        
+        # Generate lookup table for r in [0, R_grid_eff[-1]]
+        R_max_check = R_grid_eff[-1]
+        r_samples = np.linspace(0.0, R_max_check, 500)
+        z_offsets = []
+        
+        for r in r_samples:
+            # Find the first height where effective tool radius is >= r
+            mask = R_grid_eff >= r
+            if np.any(mask):
+                z_offsets.append(z_grid[np.argmax(mask)])
+            else:
+                z_offsets.append(H_max)
+                
+        return r_samples, np.array(z_offsets)
+
+    @staticmethod
+    def generate_optimized_search_grid(r_cutter, r_neck, r_max, safe_margin):
+        """
+        Generates a non-uniform multi-resolution search grid of (dx, dy, r) points.
+        Fine-grained near the cutter tip, medium for neck, coarse for holder/collet.
+        """
+        # Define step sizes
+        step_fine = max(0.1, min(0.5, r_cutter / 8.0))
+        step_med = max(0.5, min(1.0, r_neck / 8.0))
+        step_coarse = max(1.0, min(2.5, r_max / 8.0))
+        
+        grid_points = []
+        
+        # 1. Fine grid for tip zone
+        r_fine_limit = r_cutter + safe_margin
+        fine_range = np.arange(-r_fine_limit, r_fine_limit + step_fine, step_fine)
+        dx_f, dy_f = np.meshgrid(fine_range, fine_range)
+        dx_f = dx_f.flatten()
+        dy_f = dy_f.flatten()
+        r_f = np.sqrt(dx_f**2 + dy_f**2)
+        mask_f = r_f <= r_fine_limit
+        for x, y, r in zip(dx_f[mask_f], dy_f[mask_f], r_f[mask_f]):
+            grid_points.append((x, y, r))
+            
+        # 2. Medium grid for neck zone
+        if r_neck > r_cutter:
+            r_med_limit = r_neck + safe_margin
+            med_range = np.arange(-r_med_limit, r_med_limit + step_med, step_med)
+            dx_m, dy_m = np.meshgrid(med_range, med_range)
+            dx_m = dx_m.flatten()
+            dy_m = dy_m.flatten()
+            r_m = np.sqrt(dx_m**2 + dy_m**2)
+            mask_m = (r_m > r_fine_limit) & (r_m <= r_med_limit)
+            for x, y, r in zip(dx_m[mask_m], dy_m[mask_m], r_m[mask_m]):
+                grid_points.append((x, y, r))
+                
+        # 3. Coarse grid for holder/collet zone
+        if r_max > r_neck:
+            r_max_limit = r_max + safe_margin
+            coarse_range = np.arange(-r_max_limit, r_max_limit + step_coarse, step_coarse)
+            dx_c, dy_c = np.meshgrid(coarse_range, coarse_range)
+            dx_c = dx_c.flatten()
+            dy_c = dy_c.flatten()
+            r_c = np.sqrt(dx_c**2 + dy_c**2)
+            mask_c = (r_c > r_med_limit) & (r_c <= r_max_limit)
+            for x, y, r in zip(dx_c[mask_c], dy_c[mask_c], r_c[mask_c]):
+                grid_points.append((x, y, r))
+                
+        return np.array(grid_points)
+
+    @staticmethod
+    def apply_max_wall_angle_filter(points, max_wall_angle_deg):
+        """
+        Limits the maximum slope of the toolpath trajectory to respect the tool's maximum wall angle limit.
+        Traverses the path forward and backward to smooth steep drops and rises.
+        """
+        if len(points) < 2 or max_wall_angle_deg <= 0.0 or max_wall_angle_deg >= 90.0:
+            return points
+            
+        filtered = np.copy(points)
+        max_slope = np.tan(np.radians(max_wall_angle_deg))
+        
+        # Forward pass: limit sudden drops
+        for i in range(1, len(filtered)):
+            dx = filtered[i, 0] - filtered[i-1, 0]
+            dy = filtered[i, 1] - filtered[i-1, 1]
+            dist = np.sqrt(dx**2 + dy**2)
+            if dist > 0.0:
+                filtered[i, 2] = max(filtered[i, 2], filtered[i-1, 2] - dist * max_slope)
+                
+        # Backward pass: limit sudden rises
+        for i in range(len(filtered) - 2, -1, -1):
+            dx = filtered[i, 0] - filtered[i+1, 0]
+            dy = filtered[i, 1] - filtered[i+1, 1]
+            dist = np.sqrt(dx**2 + dy**2)
+            if dist > 0.0:
+                filtered[i, 2] = max(filtered[i, 2], filtered[i+1, 2] - dist * max_slope)
+                
+        return filtered

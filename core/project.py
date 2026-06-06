@@ -56,6 +56,7 @@ class Project:
         # Operations
         self.operations = []  # List of dictionaries, each describing a CAM operation
         self.export_mode = "Single File"  # "Single File", "Separate per Tool", "Separate per Op"
+        self.toolpath_geometry_mode = "Legacy"  # "Legacy" or "Geometry Aware"
         
         # Undo/Redo Stack
         self.undo_stack = []
@@ -99,7 +100,8 @@ class Project:
             "material_name": self.material_name,
             "machine_name": self.machine_name,
             "operations": self.operations,
-            "export_mode": self.export_mode
+            "export_mode": self.export_mode,
+            "toolpath_geometry_mode": self.toolpath_geometry_mode
         }
  
     def deserialize(self, data):
@@ -143,6 +145,7 @@ class Project:
         self.machine_name = data.get("machine_name", "Generic Stone Router")
         self.operations = data.get("operations", [])
         self.export_mode = data.get("export_mode", "Single File")
+        self.toolpath_geometry_mode = data.get("toolpath_geometry_mode", "Legacy")
 
     def save_snapshot(self):
         """Saves current state snapshot to the Undo stack. Clears the Redo stack."""
